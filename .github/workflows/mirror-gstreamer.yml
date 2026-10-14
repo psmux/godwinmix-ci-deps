@@ -1,0 +1,55 @@
+name: mirror GStreamer for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: GStreamer version
+        default: "1.28.6"
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download, resuming each time upstream cuts it
+        run: |
+          set -u
+          name="gstreamer-1.0-msvc-x86_64-$VERSION.exe"
+          url="https://gstreamer.freedesktop.org/data/pkg/windows/$VERSION/msvc/$name"
+          size=""
+          for i in $(seq 1 60); do
+            size=$(curl -sfIL "$url" | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v}') && [ -n "$size" ] && break
+            sleep 20
+          done
+          [ -n "$size" ] || { echo "upstream never answered the size"; exit 1; }
+          echo "size $size"
+          have=0
+          while [ "$have" -lt "$size" ]; do
+            curl -sfL --continue-at - --output "$name" "$url" || sleep 10
+            have=$(stat -c %s "$name" 2>/dev/null || echo 0)
+            echo "$have of $size"
+          done
+          [ "$have" -eq "$size" ] || { echo "got $have bytes, more than $size"; exit 1; }
+          sha256sum "$name" | tee "$name.sha256"
+          for i in $(seq 1 30); do
+            if up=$(curl -sfL "$url.sha256sum") && echo "$up" | grep -Eq '^[0-9a-f]{64}'; then
+              [ "$(echo "$up" | cut -c1-64)" = "$(cut -c1-64 "$name.sha256")" ] || { echo "the SHA256 does not match upstream's: $up"; exit 1; }
+              echo "matches upstream's SHA256"
+              break
+            fi
+            sleep 20
+          done
+          echo "NAME=$name" >> "$GITHUB_ENV"
+      - name: Publish
+        run: |
+          tag="gstreamer-$VERSION"
+          gh release create "$tag" -R "$GITHUB_REPOSITORY" --title "GStreamer $VERSION for Windows (MSVC x86_64)" \
+            --notes "The unmodified upstream installer from https://gstreamer.freedesktop.org/data/pkg/windows/$VERSION/msvc/. SHA256: $(cut -c1-64 "$NAME.sha256")" \
+            "$NAME" "$NAME.sha256"
