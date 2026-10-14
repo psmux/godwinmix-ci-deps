@@ -6,6 +6,9 @@ on:
       version:
         description: GStreamer version
         default: "1.28.6"
+      host:
+        description: where to download from; origin skips freedesktop.org's CDN, which answered 503 for hours
+        default: origin.gstreamer.freedesktop.org
 
 permissions:
   contents: write
@@ -22,7 +25,7 @@ jobs:
         run: |
           set -u
           name="gstreamer-1.0-msvc-x86_64-$VERSION.exe"
-          url="https://gstreamer.freedesktop.org/data/pkg/windows/$VERSION/msvc/$name"
+          url="https://${{ inputs.host }}/data/pkg/windows/$VERSION/msvc/$name"
           size=""
           for i in $(seq 1 60); do
             size=$(curl -sfIL "$url" | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v}') && [ -n "$size" ] && break
@@ -32,9 +35,9 @@ jobs:
           echo "size $size"
           have=0
           while [ "$have" -lt "$size" ]; do
-            curl -sfL --continue-at - --output "$name" "$url" || sleep 10
+            curl -sfL --continue-at - --speed-limit 100000 --speed-time 60 --output "$name" "$url" || sleep 10
             have=$(stat -c %s "$name" 2>/dev/null || echo 0)
-            echo "$have of $size"
+            echo "$have of $size at $(date -u +%T)"
           done
           [ "$have" -eq "$size" ] || { echo "got $have bytes, more than $size"; exit 1; }
           sha256sum "$name" | tee "$name.sha256"
