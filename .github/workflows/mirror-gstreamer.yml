@@ -54,5 +54,5 @@ jobs:
         run: |
           tag="gstreamer-$VERSION"
           gh release create "$tag" -R "$GITHUB_REPOSITORY" --title "GStreamer $VERSION for Windows (MSVC x86_64)" \
-            --notes "The unmodified upstream installer from https://gstreamer.freedesktop.org/data/pkg/windows/$VERSION/msvc/. SHA256: $(cut -c1-64 "$NAME.sha256")" \
+            --notes "The unmodified upstream installer from https://gstreamer.freedesktop.org/data/pkg/windows/$VERSION/msvc/, fetched from ${{ inputs.host }}. SHA256: $(cut -c1-64 "$NAME.sha256")" \
             "$NAME" "$NAME.sha256"
