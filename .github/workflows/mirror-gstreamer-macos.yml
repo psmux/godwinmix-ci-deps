@@ -1,0 +1,63 @@
+name: mirror GStreamer for macOS
+
+# The universal runtime and devel packages, for the Intel Mac release job,
+# which can no longer get GStreamer from Homebrew: Homebrew dropped Intel
+# Macs. Same approach as the Windows mirror: fetch from origin, resume each
+# time upstream cuts the transfer, check upstream's SHA256, publish unchanged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: GStreamer version
+        default: "1.28.6"
+      host:
+        description: where to download from; origin skips freedesktop.org's CDN
+        default: origin.gstreamer.freedesktop.org
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download both packages, resuming each time upstream cuts them
+        run: |
+          set -u
+          for name in "gstreamer-1.0-$VERSION-universal.pkg" "gstreamer-1.0-devel-$VERSION-universal.pkg"; do
+            url="https://${{ inputs.host }}/data/pkg/osx/$VERSION/$name"
+            size=""
+            for i in $(seq 1 60); do
+              size=$(curl -sfIL "$url" | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v}') && [ -n "$size" ] && break
+              sleep 20
+            done
+            [ -n "$size" ] || { echo "upstream never answered the size of $name"; exit 1; }
+            echo "$name: size $size"
+            have=0
+            while [ "$have" -lt "$size" ]; do
+              curl -sfL --continue-at - --speed-limit 100000 --speed-time 60 --output "$name" "$url" || sleep 10
+              have=$(stat -c %s "$name" 2>/dev/null || echo 0)
+              echo "$have of $size at $(date -u +%T)"
+            done
+            [ "$have" -eq "$size" ] || { echo "got $have bytes, more than $size"; exit 1; }
+            sha256sum "$name" | tee "$name.sha256"
+            for i in $(seq 1 30); do
+              if up=$(curl -sfL "$url.sha256sum") && echo "$up" | grep -Eq '^[0-9a-f]{64}'; then
+                [ "$(echo "$up" | cut -c1-64)" = "$(cut -c1-64 "$name.sha256")" ] || { echo "$name does not match upstream's SHA256: $up"; exit 1; }
+                echo "$name matches upstream's SHA256"
+                break
+              fi
+              sleep 20
+            done
+          done
+      - name: Publish
+        run: |
+          tag="gstreamer-$VERSION-macos"
+          gh release create "$tag" -R "$GITHUB_REPOSITORY" --title "GStreamer $VERSION for macOS (universal)" \
+            --notes "The unmodified upstream runtime and devel packages from https://gstreamer.freedesktop.org/data/pkg/osx/$VERSION/, fetched from ${{ inputs.host }} and checked against upstream's own SHA256." \
+            gstreamer-1.0-*.pkg gstreamer-1.0-*.pkg.sha256
